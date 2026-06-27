@@ -61,6 +61,12 @@ export default function IssueCard({ issue }) {
     finally { setUpvoting(false); }
   };
 
+  const impactScore = Math.round(upvotes * severity * (1 + (issue.escalation_count || 0)));
+  const impactColor = impactScore >= 50 ? 'bg-red-50 text-red-700 border-red-200' :
+                      impactScore >= 20 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      'bg-gray-50 text-gray-500 border-gray-200';
+
+
   return (
     <div
       onClick={() => navigate(`/issues/${issue.id}`)}
@@ -117,7 +123,7 @@ export default function IssueCard({ issue }) {
           <span className="truncate">{dept}</span>
         </div>
 
-        {/* Footer: upvotes + date */}
+        {/* Footer: upvotes + impact + date */}
         <div className="flex items-center justify-between pt-2 border-t border-gray-50">
           <button
             onClick={handleUpvote}
@@ -131,6 +137,12 @@ export default function IssueCard({ issue }) {
             </span>
             <span>{upvotes}</span>
           </button>
+          {impactScore > 0 && (
+            <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full border ${impactColor}`}
+              title="Impact Score = upvotes × severity × escalation weight">
+              ⚡ {impactScore}
+            </span>
+          )}
           <span className="text-xs text-gray-400">{timeAgo(issue.createdAt)}</span>
         </div>
       </div>

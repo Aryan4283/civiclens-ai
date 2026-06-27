@@ -13,6 +13,7 @@ import AuthorityDashboard from './pages/AuthorityDashboard';
 
 // Components
 import Navbar from './components/Navbar';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -35,40 +36,42 @@ function App() {
         <div className="min-h-screen bg-civic-surface flex flex-col font-sans text-gray-800">
           <Navbar />
           <main className="flex-1 px-4 py-6">
-            <Routes>
-              {/* Public Routes */}
-              <Route path="/" element={<Home />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
+            <ErrorBoundary>
+              <Routes>
+                {/* Public Routes */}
+                <Route path="/" element={<Home />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
 
-              {/* Protected Routes */}
-              <Route 
-                path="/report" 
-                element={
-                  <ProtectedRoute>
-                    <ReportIssue />
-                  </ProtectedRoute>
-                } 
-              />
-              <Route path="/issues/:id" element={<IssueDetail />} />
+                {/* Protected Routes */}
+                <Route 
+                  path="/report" 
+                  element={
+                    <ProtectedRoute>
+                      <ReportIssue />
+                    </ProtectedRoute>
+                  } 
+                />
+                <Route path="/issues/:id" element={<IssueDetail />} />
 
-              <Route 
-                path="/dashboard" 
-                element={
-                  <ProtectedRoute>
-                    <CitizenDashboard />
-                  </ProtectedRoute>
-                } 
-              />
-              <Route 
-                path="/authority" 
-                element={
-                  <ProtectedRoute>
-                    <AuthorityDashboard />
-                  </ProtectedRoute>
-                } 
-              />
-            </Routes>
+                <Route 
+                  path="/dashboard" 
+                  element={
+                    <ProtectedRoute>
+                      <CitizenDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
+                <Route 
+                  path="/authority" 
+                  element={
+                    <ProtectedRoute>
+                      <AuthorityDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
+              </Routes>
+            </ErrorBoundary>
           </main>
         </div>
       </Router>

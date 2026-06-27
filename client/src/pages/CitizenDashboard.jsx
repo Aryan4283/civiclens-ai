@@ -93,9 +93,19 @@ export default function CitizenDashboard() {
   }, [activeTab]);
 
   if (loading) return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-      <div className="w-12 h-12 border-4 border-civic-primary border-t-transparent rounded-full animate-spin" />
-      <p className="text-gray-500 font-medium">Loading your dashboard…</p>
+    <div className="max-w-5xl mx-auto space-y-7 animate-pulse">
+      <div className="bg-gray-200 rounded-3xl h-32 w-full" />
+      <div className="flex gap-4">
+        <div className="bg-gray-200 h-10 w-32 rounded" />
+        <div className="bg-gray-200 h-10 w-32 rounded" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="bg-gray-200 rounded-2xl h-48" />
+        <div className="bg-gray-200 rounded-2xl h-48" />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[...Array(4)].map((_, i) => <div key={i} className="bg-gray-200 h-24 rounded-2xl" />)}
+      </div>
     </div>
   );
 

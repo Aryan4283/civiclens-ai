@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import UploadZone from '../components/UploadZone';
-import { analyzeMedia, submitIssue } from '../services/api';
+import { analyzeMedia, submitIssue, analyzeVoice } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
+import { getCityCoords } from '../utils/cityCoords';
 
 export default function ReportIssue() {
   const navigate = useNavigate();
+  const { userProfile } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -17,12 +20,18 @@ export default function ReportIssue() {
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
   const [address, setAddress] = useState('');
-  const [locState, setLocState] = useState('');
-  const [locCity, setLocCity] = useState('');
+  const [locState, setLocState] = useState((userProfile && userProfile.state) || '');
+  const [locCity, setLocCity]   = useState((userProfile && userProfile.city)  || '');
   const [locArea, setLocArea] = useState('');
   const [locLandmark, setLocLandmark] = useState('');
   const [locating, setLocating] = useState(false);
   const [submittedId, setSubmittedId] = useState('');
+  const [isClustered, setIsClustered] = useState(false);
+
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = React.useRef(null);
+  const audioChunksRef = React.useRef([]);
 
   const mapContainerRef = React.useRef(null);
   const mapInstanceRef = React.useRef(null);
@@ -45,7 +54,7 @@ export default function ReportIssue() {
       }
       const script = document.createElement('script');
       script.id = 'google-maps-script';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_KEY}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_KEY}&libraries=visualization,places`;
       script.async = true;
       script.onload = initReportMap;
       document.head.appendChild(script);
@@ -55,8 +64,10 @@ export default function ReportIssue() {
   const initReportMap = () => {
     if (!mapContainerRef.current) return;
 
-    const initialLat = latitude || 22.7196;
-    const initialLng = longitude || 75.8577;
+    // Center on: GPS coords > user's registered city > Indore default
+    const userCityCoords = getCityCoords((userProfile && userProfile.city) || '');
+    const initialLat = latitude || (userCityCoords && userCityCoords.lat) || 22.7196;
+    const initialLng = longitude || (userCityCoords && userCityCoords.lng) || 75.8577;
     const center = { lat: Number(initialLat), lng: Number(initialLng) };
 
     const map = new window.google.maps.Map(mapContainerRef.current, {
@@ -149,6 +160,7 @@ export default function ReportIssue() {
             markerInstanceRef.current.setPosition({ lat, lng });
           }
         } else {
+          console.warn(`Geocode failed for query: "${addressQueries[index]}" with status: ${status}`);
           tryGeocode(index + 1);
         }
       });
@@ -174,7 +186,7 @@ export default function ReportIssue() {
       const response = await analyzeMedia(base64, type);
       if (response && response.success) {
         setAnalysis(response.analysis);
-        setUserDescription(response.analysis.ai_description || '');
+        setUserDescription('');
         setStep(2);
       } else {
         throw new Error('Analysis response unsuccessful');
@@ -192,6 +204,72 @@ export default function ReportIssue() {
       setStep(2);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Audio = reader.result;
+          setMediaBase64(base64Audio);
+          setMediaType('audio');
+
+          setLoading(true);
+          setLoadingMessage('AI is analyzing your voice report...');
+          try {
+            const response = await analyzeVoice(base64Audio);
+            if (response && response.success) {
+              setAnalysis(response.analysis);
+              setUserDescription('');
+              setStep(2);
+            } else {
+              throw new Error('Voice analysis response unsuccessful');
+            }
+          } catch (err) {
+            console.error('Error during AI voice analysis:', err);
+            setAnalysis({
+              category: 'other',
+              severity_score: 3,
+              ai_description: 'Failed to analyze voice automatically. Please describe the issue manually.',
+              suggested_department: 'Municipal Corporation',
+              is_urgent: false,
+              hazard_tags: []
+            });
+            setStep(2);
+          } finally {
+            setLoading(false);
+          }
+        };
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Error accessing microphone:', err);
+      alert('Microphone access denied or unavailable.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
     }
   };
 
@@ -248,16 +326,23 @@ export default function ReportIssue() {
       },
       user_description: userDescription,
       location: {
-        latitude,
-        longitude,
-        address
+        lat: latitude,
+        lng: longitude,
+        address,
+        city: userProfile?.city || '',
+        state: userProfile?.state || ''
       }
     };
 
     try {
       const data = await submitIssue(issueData);
-      console.log('Navigating to issue:', data.issueId);
-      navigate(`/issues/${data.issueId}`);
+      setSubmittedId(data.issueId);
+      if (data.clustered) {
+        setIsClustered(true);
+      } else {
+        setIsClustered(false);
+      }
+      setStep(3);
     } catch (err) {
       console.error('Submission failed:', err);
       alert('Failed to submit issue. Please check details and try again.');
@@ -319,7 +404,7 @@ export default function ReportIssue() {
       {!loading && step === 1 && (
         <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-xl text-center">
           <h2 className="text-2xl font-bold text-gray-800 mb-2">Report a Civic Issue</h2>
-          <p className="text-gray-500 mb-8 max-w-md mx-auto">
+          <p className="text-gray-500 mb-6 max-w-md mx-auto">
             Upload a photo or video of the infrastructure problem. Our AI will analyze it to route it to the correct department.
           </p>
           <UploadZone onUploadComplete={handleUploadComplete} />
@@ -416,12 +501,12 @@ export default function ReportIssue() {
             <label className="block text-sm font-bold text-gray-700 mb-2">
               Incident Location
             </label>
-            <div className="flex flex-col md:flex-row gap-3">
+            <div className="flex flex-col gap-3">
               <button
                 type="button"
-                onClick={detectLocation}
+                onClick={() => detectLocation(false)}
                 disabled={locating}
-                className="px-5 py-3 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-800 font-semibold rounded-xl flex items-center justify-center space-x-2 border transition duration-200 md:w-56"
+                className="w-full px-5 py-4 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50 text-gray-800 font-semibold rounded-xl flex items-center justify-center space-x-2 border transition duration-200"
               >
                 {locating ? (
                   <>
@@ -430,67 +515,11 @@ export default function ReportIssue() {
                   </>
                 ) : (
                   <>
-                    <span>📍</span>
-                    <span>Use GPS Location</span>
+                    <span className="text-xl">📍</span>
+                    <span>Auto-detect GPS Location</span>
                   </>
                 )}
               </button>
-
-              <div className="flex-1 flex flex-col gap-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    value={locState}
-                    onChange={(e) => setLocState(e.target.value)}
-                    placeholder="State / Province"
-                    className="px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-civic-primary outline-none transition duration-200"
-                  />
-                  <input
-                    type="text"
-                    value={locCity}
-                    onChange={(e) => setLocCity(e.target.value)}
-                    placeholder="City / District"
-                    className="px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-civic-primary outline-none transition duration-200"
-                  />
-                  <input
-                    type="text"
-                    value={locArea}
-                    onChange={(e) => setLocArea(e.target.value)}
-                    placeholder="Area / Neighborhood"
-                    className="px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-civic-primary outline-none transition duration-200"
-                  />
-                  <input
-                    type="text"
-                    value={locLandmark}
-                    onChange={(e) => setLocLandmark(e.target.value)}
-                    placeholder="Nearest Landmark"
-                    className="px-4 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-civic-primary outline-none transition duration-200"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const queries = [];
-                    const full = [locLandmark, locArea, locCity, locState].filter(Boolean).join(', ');
-                    if (full) queries.push(full);
-                    
-                    const noLandmark = [locArea, locCity, locState].filter(Boolean).join(', ');
-                    if (noLandmark && noLandmark !== full) queries.push(noLandmark);
-                    
-                    const cityState = [locCity, locState].filter(Boolean).join(', ');
-                    if (cityState && cityState !== noLandmark) queries.push(cityState);
-
-                    if (queries.length > 0) {
-                      geocodeAddress(queries);
-                    } else {
-                      alert('Please enter at least one location detail to search.');
-                    }
-                  }}
-                  className="w-full px-4 py-3 bg-civic-primary text-white font-semibold rounded-xl hover:bg-blue-600 transition duration-200"
-                >
-                  Find on Map
-                </button>
-              </div>
             </div>
 
             {/* Interactive Map */}
@@ -546,8 +575,14 @@ export default function ReportIssue() {
           </div>
           
           <div className="space-y-2">
-            <h2 className="text-2xl font-extrabold text-gray-800">Report Successfully Filed!</h2>
-            <p className="text-gray-500">Thank you for contributing to your city's improvement.</p>
+            <h2 className="text-2xl font-extrabold text-gray-800">
+              {isClustered ? 'Report Added to Mega-Issue!' : 'Report Successfully Filed!'}
+            </h2>
+            <p className="text-gray-500">
+              {isClustered 
+                ? 'Your report was matched with a nearby issue of the same category. We have added your report to increase its priority!' 
+                : 'Thank you for contributing to your city\'s improvement.'}
+            </p>
           </div>
 
           <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-xl inline-flex items-center space-x-2 shadow-sm">
@@ -578,6 +613,7 @@ export default function ReportIssue() {
                 setLongitude(null);
                 setAddress('');
                 setSubmittedId('');
+                setIsClustered(false);
               }}
               className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded-xl border transition duration-200"
             >

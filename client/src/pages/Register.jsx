@@ -1,28 +1,34 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { INDIAN_STATES } from '../utils/cityCoords';
 
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
 
-  const [name, setName]               = useState('');
-  const [email, setEmail]             = useState('');
-  const [password, setPassword]       = useState('');
-  const [confirmPw, setConfirmPw]     = useState('');
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState('');
+  const [name, setName]           = useState('');
+  const [email, setEmail]         = useState('');
+  const [password, setPassword]   = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [city, setCity]           = useState('');
+  const [state, setState]         = useState('');
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name || !email || !password || !confirmPw) { setError('Please fill in all fields.'); return; }
+    if (!name || !email || !password || !confirmPw || !state || !city) {
+      setError('Please fill in all fields including your state and city.');
+      return;
+    }
     if (password !== confirmPw) { setError('Passwords do not match.'); return; }
     if (password.length < 6) { setError('Password must be at least 6 characters.'); return; }
 
     setError('');
     setLoading(true);
     try {
-      await register(email, password, name);
+      await register(email, password, name, city, state);
       navigate('/');
     } catch (err) {
       const msg = err.code === 'auth/email-already-in-use'
@@ -64,9 +70,9 @@ export default function Register() {
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">Full Name</label>
                 <input
-                  id="register-name"
+                  id="new-user-fullname"
                   type="text"
-                  autoComplete="name"
+                  autoComplete="off"
                   value={name}
                   onChange={e => setName(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm text-gray-800
@@ -126,18 +132,56 @@ export default function Register() {
                   disabled={loading}
                 />
                 {confirmPw && confirmPw !== password && (
-                  <p className="text-xs text-red-500 mt-1">Passwords don't match</p>
-                )}
-              </div>
+                <p className="text-xs text-red-500 mt-1">Passwords don't match</p>
+              )}
+            </div>
 
-              <button
-                id="register-submit"
-                type="submit"
-                disabled={loading}
-                className="w-full py-3.5 mt-2 bg-civic-success hover:bg-green-700 disabled:bg-green-300
-                  text-white font-bold rounded-xl shadow-md hover:shadow-lg
-                  transition-all duration-200 flex items-center justify-center gap-2"
-              >
+            {/* Location fields */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">State</label>
+                <select
+                  id="register-state"
+                  value={state}
+                  onChange={e => setState(e.target.value)}
+                  disabled={loading}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm text-gray-800
+                    focus:outline-none focus:ring-2 focus:ring-civic-success/40 focus:border-civic-success
+                    transition-all duration-200 bg-white"
+                >
+                  <option value="">Select state...</option>
+                  {INDIAN_STATES.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">City</label>
+                <input
+                  id="register-city"
+                  type="text"
+                  value={city}
+                  onChange={e => setCity(e.target.value)}
+                  disabled={loading}
+                  placeholder="e.g. Indore"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm text-gray-800
+                    focus:outline-none focus:ring-2 focus:ring-civic-success/40 focus:border-civic-success
+                    transition-all duration-200 placeholder-gray-400"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 -mt-2">
+              📍 Used to personalize your map view and show local issues first.
+            </p>
+
+            <button
+              id="register-submit"
+              type="submit"
+              disabled={loading}
+              className="w-full py-3.5 mt-2 bg-civic-success hover:bg-green-700 disabled:bg-green-300
+                text-white font-bold rounded-xl shadow-md hover:shadow-lg
+                transition-all duration-200 flex items-center justify-center gap-2"
+            >
                 {loading ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

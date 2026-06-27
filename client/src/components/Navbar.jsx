@@ -33,10 +33,10 @@ export default function Navbar() {
   return (
     <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur-sm border-b border-gray-100 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center h-16">
 
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 shrink-0">
+          <Link to="/" className="flex items-center gap-2 shrink-0 mr-10">
             <span className="text-2xl">🏙️</span>
             <span className="text-lg font-extrabold text-civic-primary tracking-tight">
               CivicLens<span className="text-gray-400 font-light">.ai</span>
@@ -44,15 +44,11 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop nav links */}
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden md:flex items-center gap-8 flex-1">
             <NavLink to="/" end className={navLinkClass}>Home</NavLink>
-            {user && (
-              <>
-                <NavLink to="/report" className={navLinkClass}>Report Issue</NavLink>
-                <NavLink to="/dashboard" className={navLinkClass}>My Dashboard</NavLink>
-                <NavLink to="/authority" className={navLinkClass}>Authority Portal</NavLink>
-              </>
-            )}
+            <NavLink to="/report" className={navLinkClass}>Report Issue</NavLink>
+            <NavLink to="/dashboard" className={navLinkClass}>My Dashboard</NavLink>
+            <NavLink to="/authority" className={navLinkClass}>Authority Portal</NavLink>
           </div>
 
           {/* Desktop right side */}
@@ -113,19 +109,15 @@ export default function Navbar() {
       {menuOpen && (
         <div className="md:hidden bg-white border-t border-gray-100 px-4 py-4 space-y-3 shadow-lg">
           <NavLink to="/" end className={navLinkClass} onClick={() => setMenuOpen(false)}>Home</NavLink>
-          {user && (
-            <>
-              <div className="block">
-                <NavLink to="/report" className={navLinkClass} onClick={() => setMenuOpen(false)}>Report Issue</NavLink>
-              </div>
-              <div className="block">
-                <NavLink to="/dashboard" className={navLinkClass} onClick={() => setMenuOpen(false)}>My Dashboard</NavLink>
-              </div>
-              <div className="block">
-                <NavLink to="/authority" className={navLinkClass} onClick={() => setMenuOpen(false)}>Authority Portal</NavLink>
-              </div>
-            </>
-          )}
+          <div className="block">
+            <NavLink to="/report" className={navLinkClass} onClick={() => setMenuOpen(false)}>Report Issue</NavLink>
+          </div>
+          <div className="block">
+            <NavLink to="/dashboard" className={navLinkClass} onClick={() => setMenuOpen(false)}>My Dashboard</NavLink>
+          </div>
+          <div className="block">
+            <NavLink to="/authority" className={navLinkClass} onClick={() => setMenuOpen(false)}>Authority Portal</NavLink>
+          </div>
           <div className="pt-3 border-t border-gray-100">
             {user ? (
               <div className="flex items-center justify-between">

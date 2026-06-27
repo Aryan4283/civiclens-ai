@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
-const { proModel, parseGeminiJSON } = require('../utils/gemini');
+const { proModel, flashModel, parseGeminiJSON } = require('../utils/gemini');
+const { runSynthesizer, getCachedReport } = require('../agents/synthesizerAgent');
+
 
 router.get('/stats', async (req, res) => {
   try {
@@ -18,7 +20,7 @@ router.get('/stats', async (req, res) => {
       return updatedAt >= weekAgo;
     }).length;
 
-    const active = issues.filter(i => ['reported', 'in_progress'].includes(i.status)).length;
+    const active = issues.filter(i => ['reported', 'in_progress', 'escalated'].includes(i.status)).length;
 
     const departments = new Set(
       issues.map(i => i.routing?.assigned_agency || i.analysis?.suggested_department).filter(Boolean)
@@ -198,8 +200,10 @@ ${JSON.stringify(issues.map(i => ({
   category: i.category || i.analysis?.category,
   severity: i.severity_score || i.analysis?.severity_score,
   status: i.status,
-  department: i.department || i.routing?.assigned_agency,
-  location: i.location?.address
+    department: i.department || i.routing?.assigned_agency,
+  location: i.location?.address,
+  lat: i.location?.lat,
+  lng: i.location?.lng
 })), null, 2)}
 
 Respond with ONLY raw JSON in the following format:
@@ -216,7 +220,9 @@ Respond with ONLY raw JSON in the following format:
     {
       "area": "<Area or neighborhood name, e.g., 'Vijay Nagar'>",
       "predicted_issue_type": "<Predicted issue type, e.g., 'Water Leakage'>",
-      "confidence": "High|Medium|Low"
+      "confidence": "High|Medium|Low",
+      "approximate_lat": <float, approximate latitude from the issue data>,
+      "approximate_lng": <float, approximate longitude from the issue data>
     }
   ],
   "strategic_advice": [
@@ -255,6 +261,131 @@ Respond with ONLY raw JSON in the following format:
     } else {
       res.status(500).json({ error: 'Failed to generate insights', details: error.message });
     }
+  }
+});
+
+router.get('/city-bulletin', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    
+    if (!forceRefresh) {
+      const cached = await getCachedReport();
+      if (cached) {
+        return res.json({ success: true, data: cached, cached: true });
+      }
+    }
+    
+    // Generate fresh report
+    const result = await runSynthesizer();
+    res.json({ success: result.success, data: result.data, cached: false });
+  } catch (error) {
+    console.error('City Bulletin Error:', error);
+    res.status(500).json({ error: 'Failed to generate city bulletin', details: error.message });
+  }
+});
+
+router.get('/scorecard', async (req, res) => {
+  try {
+    // Fetch all issues
+    const snapshot = await db.collection('issues').get();
+    const issues = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    // Helper to get dates safely
+    const getUpdatedAt = (issue) => {
+      const val = issue.updated_at || issue.updatedAt;
+      if (!val) return new Date();
+      if (typeof val.toDate === 'function') return val.toDate();
+      return new Date(val);
+    };
+
+    const getSLADeadline = (issue) => {
+      const val = issue.sla_deadline_timestamp || (issue.routing && issue.routing.sla_deadline_timestamp);
+      if (!val) return null;
+      if (typeof val.toDate === 'function') return val.toDate();
+      return new Date(val);
+    };
+
+    // Calculate per-department stats
+    const deptStats = {};
+    issues.forEach(issue => {
+      const dept = issue.department || (issue.routing && issue.routing.assigned_agency) || (issue.analysis && issue.analysis.suggested_department) || 'Unknown';
+      if (!deptStats[dept]) {
+        deptStats[dept] = { 
+          total: 0, resolved: 0, escalated: 0, 
+          totalSLAHours: 0, slaBreaches: 0 
+        };
+      }
+      deptStats[dept].total++;
+      if (issue.status === 'resolved') deptStats[dept].resolved++;
+      if (issue.status === 'escalated') deptStats[dept].escalated++;
+      
+      const slaDeadline = getSLADeadline(issue);
+      const updatedAt = getUpdatedAt(issue);
+      if (slaDeadline && updatedAt > slaDeadline) {
+        deptStats[dept].slaBreaches++;
+      }
+    });
+
+    // Calculate scores (0-100)
+    const scorecards = Object.entries(deptStats).map(([dept, stats]) => {
+      const resolutionRate = stats.total > 0 ? (stats.resolved / stats.total) * 100 : 0;
+      const slaCompliance = stats.total > 0 ? 
+        ((stats.total - stats.slaBreaches) / stats.total) * 100 : 100;
+      const score = Math.round((resolutionRate * 0.6) + (slaCompliance * 0.4));
+      
+      return { 
+        department: dept, 
+        score, 
+        total: stats.total,
+        resolved: stats.resolved,
+        escalated: stats.escalated,
+        resolutionRate: Math.round(resolutionRate),
+        slaCompliance: Math.round(slaCompliance),
+        grade: score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : 'D'
+      };
+    }).sort((a, b) => b.score - a.score);
+
+    // Use Gemini to generate AI commentary
+    const prompt = `You are analyzing government department performance data.
+    
+Department scorecards: ${JSON.stringify(scorecards)}
+
+Generate a brief AI performance review (3-4 sentences total).
+Mention the top performer, the worst performer, and one specific 
+actionable recommendation.
+
+Respond ONLY with raw JSON:
+{
+  "overall_city_score": <weighted average 0-100>,
+  "top_performer": "<department name>",
+  "needs_improvement": "<department name>",
+  "ai_commentary": "<3-4 sentence review>",
+  "key_recommendation": "<one specific actionable recommendation>"
+}`;
+
+    const result = await flashModel.generateContent(prompt);
+    let aiInsights = parseGeminiJSON(result.response.text());
+
+    if (!aiInsights) {
+      const retryResult = await flashModel.generateContent(
+        prompt + "\n\nCRITICAL: Your previous response could not be parsed as JSON. Respond with ONLY a valid JSON object. Nothing else."
+      );
+      aiInsights = parseGeminiJSON(retryResult.response.text());
+    }
+
+    if (!aiInsights) {
+      aiInsights = {
+        overall_city_score: scorecards.length > 0 ? Math.round(scorecards.reduce((acc, curr) => acc + curr.score, 0) / scorecards.length) : 100,
+        top_performer: scorecards[0]?.department || "None",
+        needs_improvement: scorecards[scorecards.length - 1]?.department || "None",
+        ai_commentary: "Performance data suggests varied service delivery speeds across city departments. Several tasks require critical attention to comply with municipal SLA standards.",
+        key_recommendation: "Ensure high-priority departments allocate dedicated task forces for overdue street and waste issues."
+      };
+    }
+
+    res.json({ success: true, scorecards, aiInsights });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

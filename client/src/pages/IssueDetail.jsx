@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getIssue, upvoteIssue, askIssueAI, updateIssue } from '../services/api';
+import { getIssue, upvoteIssue, askIssueAI, updateIssue, resolveIssue, verifyIssue } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import SeverityBadge from '../components/SeverityBadge';
 import UploadZone from '../components/UploadZone';
 import axios from 'axios';
@@ -35,6 +36,7 @@ function timeAgo(dateInput) {
 export default function IssueDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { userProfile } = useAuth();
 
   const [issue, setIssue]       = useState(null);
   const [loading, setLoading]   = useState(true);
@@ -53,10 +55,85 @@ export default function IssueDetail() {
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef(null);
 
-  // Verification State
   const [showVerify, setShowVerify] = useState(false);
+  const [showResolve, setShowResolve] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyMessage, setVerifyMessage] = useState('');
+  
+  const miniMapRef = useRef(null);
+
+  useEffect(() => {
+    if (!issue || !issue.location?.lat || !miniMapRef.current) return;
+    
+    const initMiniMap = () => {
+      if (!miniMapRef.current) return;
+      const pos = { lat: Number(issue.location.lat), lng: Number(issue.location.lng) };
+      const map = new window.google.maps.Map(miniMapRef.current, {
+        center: pos,
+        zoom: 15,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true,
+      });
+      new window.google.maps.Marker({
+        position: pos,
+        map,
+      });
+    };
+
+    if (window.google && window.google.maps) {
+      initMiniMap();
+    } else {
+      if (document.getElementById('google-maps-script')) {
+        const check = setInterval(() => {
+          if (window.google && window.google.maps) {
+            clearInterval(check);
+            initMiniMap();
+          }
+        }, 100);
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'google-maps-script';
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${import.meta.env.VITE_GOOGLE_MAPS_KEY}`;
+      script.async = true;
+      script.onload = initMiniMap;
+      document.head.appendChild(script);
+    }
+  }, [issue]);
+
+  // SLA Countdown
+  const [countdown, setCountdown] = useState(null);
+
+  useEffect(() => {
+    if (!issue) return;
+    const createdAt = issue.createdAt?.toDate
+      ? issue.createdAt.toDate()
+      : issue.createdAt?._seconds
+      ? new Date(issue.createdAt._seconds * 1000)
+      : issue.created_at ? new Date(issue.created_at) : null;
+    const slaHours = issue.routing?.sla_deadline_hours || issue.sla_deadline_hours || 72;
+    if (!createdAt) return;
+    const deadline = new Date(createdAt.getTime() + slaHours * 3600000);
+
+    const update = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        setCountdown({ expired: true, text: 'SLA EXPIRED', color: 'text-red-600', bg: 'bg-red-50 border-red-200' });
+      } else {
+        const h = Math.floor(remaining / 3600000);
+        const m = Math.floor((remaining % 3600000) / 60000);
+        const s = Math.floor((remaining % 60000) / 1000);
+        const pct = remaining / (slaHours * 3600000);
+        const color = pct > 0.5 ? 'text-green-600' : pct > 0.2 ? 'text-amber-600' : 'text-red-600';
+        const bg = pct > 0.5 ? 'bg-green-50 border-green-200' : pct > 0.2 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200';
+        setCountdown({ expired: false, text: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`, color, bg });
+      }
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [issue]);
 
   useEffect(() => {
     setLoading(true);
@@ -128,7 +205,6 @@ export default function IssueDetail() {
       setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     }
   };
-
   const handleVerifyUpload = async (base64, type) => {
     if (!base64) {
       setShowVerify(false);
@@ -137,17 +213,46 @@ export default function IssueDetail() {
     setVerifying(true);
     setVerifyMessage('AI is verifying your image...');
     try {
-      const res = await axios.post(`/api/issues/${id}/verify`, { mediaBase64: base64, mediaType: type });
-      if (res.data?.success) {
-        setVerifyMessage(`✅ ${res.data.message} (+${res.data.points_earned} pts)`);
+      const res = await verifyIssue(id, base64, type);
+      if (res.success) {
+        setVerifyMessage(`✅ ${res.message} (+${res.points_earned} pts)`);
         setIssue(prev => ({ ...prev, verified_by_community: true, verification_count: (prev.verification_count || 0) + 1 }));
         setTimeout(() => setShowVerify(false), 3000);
       } else {
-        setVerifyMessage(`❌ ${res.data.message}`);
+        setVerifyMessage(`❌ ${res.message}`);
       }
     } catch (err) {
       console.error(err);
       setVerifyMessage('Failed to verify issue. Please try again.');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResolveUpload = async (base64, type) => {
+    if (!base64) {
+      setShowResolve(false);
+      return;
+    }
+    setVerifying(true);
+    setVerifyMessage('AI is verifying your resolution proof...');
+    try {
+      const res = await resolveIssue(id, base64, type);
+      if (res.success) {
+        setVerifyMessage(`✅ ${res.message} (+${res.points_earned || 10} pts)`);
+        setIssue(prev => ({ 
+          ...prev, 
+          status: 'resolved', 
+          resolution_media_url: base64,
+          resolution_proof_explanation: res.verification?.explanation
+        }));
+        setTimeout(() => setShowResolve(false), 3000);
+      } else {
+        setVerifyMessage(`❌ ${res.message} ${res.verification?.explanation || ''}`);
+      }
+    } catch (err) {
+      console.error(err);
+      setVerifyMessage('Failed to verify resolution. Please try again.');
     } finally {
       setVerifying(false);
     }
@@ -181,34 +286,62 @@ export default function IssueDetail() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Back button */}
-      <button onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-sm text-gray-500 hover:text-civic-primary transition-colors font-medium">
-        ← Back
-      </button>
+      {/* Top Nav */}
+      <div className="flex items-center justify-between">
+        <button onClick={() => navigate(-1)}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-civic-primary transition-colors font-medium">
+          ← Back
+        </button>
+        <button 
+          onClick={() => {
+            navigator.clipboard.writeText(window.location.href);
+            alert('Link copied to clipboard!\n\nShare this with your network to build community pressure and get authorities to act faster.');
+          }}
+          className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 hover:from-blue-100 hover:to-indigo-100 rounded-full text-sm font-bold transition-all duration-200 border border-blue-200 shadow-sm hover:shadow"
+        >
+          <span>🔗</span> Share to escalate
+        </button>
+      </div>
 
       {/* Header card */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {/* Media */}
-        <div className="relative bg-gray-900 min-h-[260px] max-h-[460px] flex items-center justify-center overflow-hidden">
-          {(issue.media_url || issue.mediaUrl) ? (
-            (issue.media_type || issue.mediaType) === 'video' ? (
-              <video src={issue.media_url || issue.mediaUrl} controls className="w-full max-h-[460px] object-contain" />
-            ) : (
-              <img src={issue.media_url || issue.mediaUrl} alt="Issue media" className="w-full max-h-[460px] object-contain" />
-            )
+        <div className={`relative bg-gray-900 min-h-[260px] max-h-[460px] flex ${issue.resolution_media_url ? 'flex-row' : 'items-center justify-center'} overflow-hidden`}>
+          {issue.resolution_media_url ? (
+            <>
+              {/* Before Image */}
+              <div className="w-1/2 relative border-r border-gray-700">
+                <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-black/60 text-white text-[10px] uppercase font-bold rounded">Before</div>
+                <img src={issue.media_url || issue.mediaUrl} alt="Before" className="w-full h-full object-cover opacity-80 hover:opacity-100 transition-opacity" />
+              </div>
+              {/* After Image */}
+              <div className="w-1/2 relative">
+                <div className="absolute top-4 right-4 z-10 px-2 py-1 bg-green-500 text-white text-[10px] uppercase font-bold rounded shadow-lg shadow-green-500/50">After (Resolved)</div>
+                <img src={issue.resolution_media_url} alt="After" className="w-full h-full object-cover" />
+              </div>
+            </>
           ) : (
-            <div className="text-8xl py-12">{CATEGORY_EMOJI[category] || '📋'}</div>
+            (issue.media_url || issue.mediaUrl) ? (
+              (issue.media_type || issue.mediaType) === 'video' ? (
+                <video src={issue.media_url || issue.mediaUrl} controls className="w-full max-h-[460px] object-contain" />
+              ) : (
+                <img src={issue.media_url || issue.mediaUrl} alt="Issue media" className="w-full max-h-[460px] object-contain" />
+              )
+            ) : (
+              <div className="text-8xl py-12">{CATEGORY_EMOJI[category] || '📋'}</div>
+            )
           )}
           {/* Status ribbon */}
-          <div className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-bold shadow ${
-            status === 'resolved'    ? 'bg-green-500 text-white' :
-            status === 'escalated'  ? 'bg-civic-danger text-white' :
-            status === 'in_progress' ? 'bg-civic-warning text-white' :
-            'bg-civic-primary text-white'
-          }`}>
-            {STATUS_LABEL[status] || status}
-          </div>
+          {!issue.resolution_media_url && (
+            <div className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-bold shadow z-10 ${
+              status === 'resolved'    ? 'bg-green-500 text-white' :
+              status === 'escalated'  ? 'bg-civic-danger text-white' :
+              status === 'in_progress' ? 'bg-civic-warning text-white' :
+              'bg-civic-primary text-white'
+            }`}>
+              {STATUS_LABEL[status] || status}
+            </div>
+          )}
         </div>
 
         {/* Meta strip */}
@@ -224,13 +357,22 @@ export default function IssueDetail() {
           </div>
           <div className="flex items-center gap-3">
             {status !== 'resolved' && (
-              <button
-                onClick={() => setShowVerify(true)}
-                className="flex items-center gap-2 px-4 py-2 border border-green-200 rounded-xl bg-green-50 text-green-700 hover:bg-green-100 transition-all duration-200 text-sm font-bold shadow-sm"
-              >
-                <span>🛡️</span>
-                <span>{issue.verified_by_community ? `Verified (${issue.verification_count || 1})` : 'Verify to Earn Points'}</span>
-              </button>
+              <>
+                <button
+                  onClick={() => { setShowVerify(true); setShowResolve(false); }}
+                  className="flex items-center gap-2 px-4 py-2 border border-green-200 rounded-xl bg-green-50 text-green-700 hover:bg-green-100 transition-all duration-200 text-sm font-bold shadow-sm"
+                >
+                  <span>🛡️</span>
+                  <span>{issue.verified_by_community ? `Verified (${issue.verification_count || 1})` : 'Verify to Earn Points'}</span>
+                </button>
+                <button
+                  onClick={() => { setShowResolve(true); setShowVerify(false); }}
+                  className="flex items-center gap-2 px-4 py-2 border border-civic-primary rounded-xl bg-blue-50 text-civic-primary hover:bg-blue-100 transition-all duration-200 text-sm font-bold shadow-sm"
+                >
+                  <span>✅</span>
+                  <span>Mark as Resolved</span>
+                </button>
+              </>
             )}
             <SeverityBadge score={severity} size="lg" />
             <button
@@ -263,11 +405,36 @@ export default function IssueDetail() {
           </div>
         )}
 
+        {showResolve && (
+          <div className="px-6 py-6 border-b border-gray-100 bg-gray-50">
+            <h3 className="text-lg font-bold text-gray-800 mb-2">Upload Fix Proof</h3>
+            <p className="text-sm text-gray-600 mb-4">Upload a current photo showing that this issue has been physically fixed. Our AI will verify the image before permanently closing this ticket.</p>
+            {verifying || verifyMessage ? (
+              <div className="text-center p-6 bg-white rounded-xl border border-gray-200">
+                {verifying && <div className="animate-spin rounded-full h-8 w-8 border-4 border-civic-primary border-t-transparent mx-auto mb-3"></div>}
+                <p className="font-semibold text-gray-800">{verifyMessage}</p>
+                {!verifying && verifyMessage && (
+                  <button onClick={() => { setShowResolve(false); setVerifyMessage(''); }} className="mt-4 text-sm text-civic-primary font-bold">Close</button>
+                )}
+              </div>
+            ) : (
+              <UploadZone onUploadComplete={handleResolveUpload} />
+            )}
+          </div>
+        )}
+
         {/* Location */}
         {issue.location && (
           <div className="px-6 py-4 border-b border-gray-100 flex items-start gap-2 text-sm text-gray-600">
             <span className="mt-0.5">📍</span>
-            <span>{issue.location.address || `${issue.location.lat?.toFixed(5)}, ${issue.location.lng?.toFixed(5)}`}</span>
+            <span className="font-medium">
+              {issue.location.address ? issue.location.address :
+               (issue.location.city || issue.location.locCity) && (issue.location.state || issue.location.locState) ? 
+                 `${issue.location.city || issue.location.locCity}, ${issue.location.state || issue.location.locState} (GPS Verified ✓)` :
+               (issue.location.lat != null && issue.location.lng != null) ? 
+                 `${Math.abs(issue.location.lat).toFixed(4)}° ${issue.location.lat >= 0 ? 'N' : 'S'}, ${Math.abs(issue.location.lng).toFixed(4)}° ${issue.location.lng >= 0 ? 'E' : 'W'}` :
+                 'Location pinned on map'}
+            </span>
           </div>
         )}
       </div>
@@ -278,14 +445,64 @@ export default function IssueDetail() {
 
           {/* AI Analysis */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4">
-            <h2 className="text-base font-extrabold text-gray-800 flex items-center gap-2">
-              🤖 AI Analysis
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-extrabold text-gray-800 flex items-center gap-2">
+                🤖 AI Analysis
+              </h2>
+              {analysis.confidence != null && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 font-semibold">AI Confidence</span>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-2 rounded-full ${
+                          analysis.confidence >= 0.8 ? 'bg-green-500' :
+                          analysis.confidence >= 0.5 ? 'bg-amber-400' : 'bg-red-400'
+                        }`}
+                        style={{ width: `${Math.round(analysis.confidence * 100)}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-bold ${
+                      analysis.confidence >= 0.8 ? 'text-green-600' :
+                      analysis.confidence >= 0.5 ? 'text-amber-600' : 'text-red-500'
+                    }`}>
+                      {Math.round(analysis.confidence * 100)}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div>
               <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Description</p>
               <p className="text-sm text-gray-700 leading-relaxed">{analysis.ai_description || 'No description.'}</p>
             </div>
+
+            {(issue.translated_description || issue.user_description) && (
+              <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 mt-2 space-y-2">
+                <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  <span>👤</span> Additional Citizen Details
+                </p>
+                <p className="text-sm text-gray-700 leading-relaxed italic">
+                  "{issue.translated_description || issue.user_description}"
+                </p>
+                {issue.translated_description && issue.translated_description !== issue.user_description && (
+                  <p className="text-xs text-gray-400">
+                    <span className="font-semibold">Original:</span> {issue.user_description}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {analysis.recommended_interim_action && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex gap-2">
+                <span className="text-blue-600 shrink-0">💡</span>
+                <div>
+                  <p className="text-xs text-blue-500 uppercase tracking-wider font-bold mb-0.5">Recommended Interim Action</p>
+                  <p className="text-sm text-blue-800 font-medium">{analysis.recommended_interim_action}</p>
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-3">
               <div>
@@ -298,6 +515,14 @@ export default function IssueDetail() {
                 <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Severity</p>
                 <SeverityBadge score={severity} size="lg" />
               </div>
+              {analysis.affected_population_estimate && (
+                <div>
+                  <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Impact Scale</p>
+                  <span className="inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 border border-purple-100 px-3 py-1 rounded-full text-sm font-semibold capitalize">
+                    👥 {analysis.affected_population_estimate}
+                  </span>
+                </div>
+              )}
             </div>
 
             {hazardTags.length > 0 && (
@@ -349,14 +574,14 @@ export default function IssueDetail() {
             </div>
           )}
 
-          {/* Escalation Notice */}
-          {issue.escalation_notice && (
-            <div className="bg-red-50 border border-red-200 rounded-2xl p-5 space-y-2">
-              <h2 className="text-sm font-extrabold text-red-800 flex items-center gap-2">
-                🚨 Escalation Notice
+          {/* Citizen Next Steps */}
+          {routing.citizen_next_steps && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 space-y-2">
+              <h2 className="text-sm font-extrabold text-indigo-800 flex items-center gap-2">
+                🧭 Your Next Steps
               </h2>
-              <p className="text-sm text-red-700 leading-relaxed">
-                {issue.escalation_notice}
+              <p className="text-sm text-indigo-700 leading-relaxed">
+                {routing.citizen_next_steps}
               </p>
             </div>
           )}
@@ -365,7 +590,8 @@ export default function IssueDetail() {
         {/* RIGHT: Routing + Status Timeline */}
         <div className="space-y-5">
           {/* Authority Controls */}
-          <div className="bg-amber-50 rounded-2xl border border-amber-200 shadow-sm p-5 space-y-4">
+          {userProfile?.role === 'authority' && (
+            <div className="bg-amber-50 rounded-2xl border border-amber-200 shadow-sm p-5 space-y-4">
             <h2 className="text-base font-extrabold text-amber-900 flex items-center gap-2">
               <span>🛡️</span> Authority Controls
             </h2>
@@ -379,11 +605,11 @@ export default function IssueDetail() {
                   onChange={(e) => handleAuthorityUpdate('status', e.target.value)}
                   disabled={updating}
                 >
-                  <option value="reported">Reported</option>
-                  <option value="in_progress">In Progress</option>
-                  <option value="escalated">Escalated</option>
+                  {status !== 'escalated' && <option value="reported">Reported</option>}
+                  {status !== 'escalated' && <option value="in_progress">In Progress</option>}
+                  {status === 'escalated' && <option value="escalated" disabled>Escalated 🚨</option>}
                   <option value="resolved">Resolved</option>
-                  <option value="duplicate">Duplicate</option>
+                  {status !== 'escalated' && <option value="duplicate">Duplicate</option>}
                 </select>
               </div>
 
@@ -409,20 +635,62 @@ export default function IssueDetail() {
               </div>
             </div>
           </div>
+          )}
 
           {/* Routing details */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
             <h2 className="text-base font-extrabold text-gray-800">🏛️ Routing</h2>
+
+            {/* SLA Countdown Timer */}
+            {status !== 'resolved' && countdown && (
+              <div className={`rounded-xl border p-3 ${countdown.bg}`}>
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-1">
+                  {countdown.expired ? '🚨 SLA Status' : '⏰ SLA Countdown'}
+                </p>
+                <div className={`font-mono text-2xl font-extrabold tracking-widest ${countdown.color}`}>
+                  {countdown.text}
+                </div>
+                {!countdown.expired && routing.sla_deadline_hours && (
+                  <p className="text-xs text-gray-400 mt-1">remaining of {routing.sla_deadline_hours}h SLA</p>
+                )}
+              </div>
+            )}
+
+            {/* SLA Overdue Badge */}
+            {(issue.escalation_level > 0 || status === 'escalated') && (
+              <div className="rounded-xl border p-3 flex items-center gap-3 bg-red-50 border-red-200">
+                <span className="text-2xl">🚨</span>
+                <div>
+                  <p className="text-sm font-extrabold text-red-800">
+                    SLA Deadline Overdue
+                  </p>
+                  <p className="text-xs text-red-600">
+                    This issue has breached its mandatory resolution timeframe.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Core routing fields */}
             {[
               { label: 'Assigned Agency', value: routing.assigned_agency },
               { label: 'SLA Tier',        value: routing.sla_tier },
-              { label: 'SLA Deadline',    value: routing.sla_deadline_hours ? `${routing.sla_deadline_hours} hours` : null },
+              { label: 'Est. Resolution', value: routing.estimated_resolution_date },
+              { label: 'Escalation Authority', value: routing.escalation_authority },
             ].map(({ label, value }) => value && (
               <div key={label}>
                 <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-0.5">{label}</p>
                 <p className="text-sm font-semibold text-gray-700">{value}</p>
               </div>
             ))}
+
+            {/* Priority Justification */}
+            {routing.priority_justification && (
+              <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider mb-1">Why This Priority?</p>
+                <p className="text-xs text-gray-600 leading-relaxed">{routing.priority_justification}</p>
+              </div>
+            )}
           </div>
 
           {/* Status Timeline */}
@@ -468,12 +736,11 @@ export default function IssueDetail() {
           {/* Location map coordinates */}
           {issue.location?.lat && issue.location?.lng && (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="bg-gray-100 h-40 flex items-center justify-center flex-col gap-2 text-gray-500">
-                <span className="text-3xl">🗺️</span>
-                <p className="text-xs font-semibold text-gray-500">GPS Coordinates</p>
-                <p className="font-mono text-xs bg-white px-2 py-1 rounded border">
-                  {issue.location.lat.toFixed(5)}, {issue.location.lng.toFixed(5)}
-                </p>
+              <div className="relative bg-gray-100 h-40 w-full" style={{ minHeight: '160px' }}>
+                <div ref={miniMapRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
+                <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm px-2 py-1 rounded shadow text-[10px] font-mono text-gray-600 font-bold border border-gray-100 pointer-events-none z-10">
+                  {`${Math.abs(issue.location.lat).toFixed(4)}° ${issue.location.lat >= 0 ? 'N' : 'S'}, ${Math.abs(issue.location.lng).toFixed(4)}° ${issue.location.lng >= 0 ? 'E' : 'W'}`}
+                </div>
               </div>
               {issue.location.address && (
                 <div className="px-4 py-3 border-t border-gray-100">

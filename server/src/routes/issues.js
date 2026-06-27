@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { analyzeMedia } = require('../agents/observerAgent');
+const { analyzeMedia, verifyResolution } = require('../agents/observerAgent');
 const { routeIssue } = require('../agents/routerAgent');
 const { db, FieldValue } = require('../config/firebase');
 const verifyAuth = require('../middleware/verifyAuth');
@@ -21,13 +21,30 @@ router.post('/analyze', async (req, res) => {
   }
 });
 
+router.post('/analyze-voice', async (req, res) => {
+  try {
+    const { audioBase64 } = req.body;
+    if (!audioBase64) return res.status(400).json({ error: 'audioBase64 is required' });
+
+    // Using analyzeVoiceReport which must be imported
+    const { analyzeVoiceReport } = require('../agents/observerAgent');
+    const analysis = await analyzeVoiceReport(audioBase64);
+    
+    res.json({ success: true, analysis });
+  } catch (error) {
+    console.error('Voice Analysis Error:', error);
+    res.status(500).json({ error: 'Voice Analysis failed', details: error.message });
+  }
+});
+
 router.post('/submit', verifyAuth, async (req, res) => {
   try {
     const {
       mediaBase64,
       mediaType,
       analysis,
-      location
+      location,
+      user_description
     } = req.body;
 
     const userId = req.user?.uid || 'anonymous';
@@ -49,6 +66,63 @@ router.post('/submit', verifyAuth, async (req, res) => {
     // We can pass the translated description into routing if we want to enhance it later
     const routingInfo = await routeIssue(analysis, location);
 
+    // MEGA-ISSUE CLUSTERING LOGIC:
+    // Check if there's an existing issue nearby with the same category.
+    let clusterIssueId = null;
+    if (location && location.lat && location.lng) {
+      // Basic bounding box approach (approx 100 meters)
+      // 1 degree lat = ~111km, so 0.001 deg = ~111m
+      const latRange = 0.001;
+      const lngRange = 0.001;
+      
+      const nearbyIssuesRef = db.collection('issues')
+        .where('status', 'in', ['reported', 'in_progress', 'escalated']);
+        
+      const nearbyIssuesSnap = await nearbyIssuesRef.get();
+      
+      const category = analysis.category || 'other';
+      
+      for (let d of nearbyIssuesSnap.docs) {
+        const data = d.data();
+        if ((data.analysis?.category === category) || (data.category === category)) {
+          if (data.location?.lat && data.location?.lng) {
+            const latDiff = Math.abs(data.location.lat - location.lat);
+            const lngDiff = Math.abs(data.location.lng - location.lng);
+            if (latDiff < latRange && lngDiff < lngRange) {
+               clusterIssueId = d.id;
+               break;
+            }
+          }
+        }
+      }
+    }
+
+    if (clusterIssueId) {
+      // It's a duplicate! We add to the existing issue's impact vote.
+      await db.collection('issues').doc(clusterIssueId).update({
+        upvotes: FieldValue.increment(1),
+        impact_count: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp()
+      });
+
+      if (userId !== 'anonymous') {
+        const userRef = db.collection('users').doc(userId);
+        await userRef.set({
+          civic_points: FieldValue.increment(10),
+          reports_count: FieldValue.increment(1)
+        }, { merge: true });
+      }
+
+      return res.json({
+        success: true,
+        issueId: clusterIssueId,
+        clustered: true,
+        message: 'Issue clustered with an existing report.',
+        routing: routingInfo
+      });
+    }
+
     const issueDoc = {
       media_url: mediaBase64,   // base64 data-URL — works as <img src> directly
       media_type: mediaType || 'image',
@@ -60,6 +134,7 @@ router.post('/submit', verifyAuth, async (req, res) => {
       userId,
       status: 'reported',
       upvotes: 0,
+      impact_count: 1,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       created_at: FieldValue.serverTimestamp(),
@@ -282,11 +357,11 @@ Respond ONLY with a JSON object:
 
       // Reward points
       await db.collection('users').doc(userId).set({
-        civic_points: FieldValue.increment(20),
+        civic_points: FieldValue.increment(10),
         verifications_count: FieldValue.increment(1)
       }, { merge: true });
 
-      res.json({ success: true, message: 'Issue verified successfully!', points_earned: 20 });
+      res.json({ success: true, message: 'Issue verified successfully!', points_earned: 10 });
     } else {
       res.json({ success: false, message: 'Verification failed. ' + parsed.reason });
     }
@@ -294,6 +369,51 @@ Respond ONLY with a JSON object:
   } catch (error) {
     console.error('Verify Error:', error);
     res.status(500).json({ error: 'Verification failed', details: error.message });
+  }
+});
+
+router.post('/:id/resolve', verifyAuth, async (req, res) => {
+  try {
+    const { mediaBase64, mediaType } = req.body;
+    const { id } = req.params;
+
+    if (!mediaBase64) return res.status(400).json({ error: 'Resolution proof media is required' });
+
+    const docRef = db.collection('issues').doc(id);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    const issue = doc.data();
+    const category = issue.analysis?.category || issue.category || 'unknown';
+    const description = issue.analysis?.ai_description || issue.ai_description || 'unknown';
+
+    const verificationResult = await verifyResolution(category, description, mediaBase64, mediaType || 'image');
+
+    if (verificationResult.is_resolved) {
+      await docRef.update({
+        status: 'resolved',
+        resolution_media_url: mediaBase64,
+        resolution_proof_explanation: verificationResult.explanation,
+        updatedAt: FieldValue.serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp()
+      });
+
+      // Reward points for resolving the issue
+      await db.collection('users').doc(req.user.uid).set({
+        civic_points: FieldValue.increment(10),
+        resolutions_count: FieldValue.increment(1)
+      }, { merge: true });
+
+      res.json({ success: true, message: 'Issue officially resolved with proof!', points_earned: 10, verification: verificationResult });
+    } else {
+      res.json({ success: false, message: 'AI rejected the resolution proof.', verification: verificationResult });
+    }
+  } catch (error) {
+    console.error('Resolve Error:', error);
+    res.status(500).json({ error: 'Failed to resolve issue', details: error.message });
   }
 });
 router.patch('/:id', verifyAuth, async (req, res) => {
