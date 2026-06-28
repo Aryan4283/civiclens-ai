@@ -405,7 +405,7 @@ export default function ReportIssue() {
         <div className="bg-white p-8 rounded-2xl border border-gray-100 shadow-xl text-center">
           <h2 className="text-2xl font-bold text-gray-800 mb-2">Report a Civic Issue</h2>
           <p className="text-gray-500 mb-6 max-w-md mx-auto">
-            Upload a photo or video of the infrastructure problem. Our AI will analyze it to route it to the correct department.
+            Upload a photo of the infrastructure problem. Our AI will analyze it to route it to the correct department.
           </p>
           <UploadZone onUploadComplete={handleUploadComplete} />
         </div>

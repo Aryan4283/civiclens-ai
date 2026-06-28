@@ -84,8 +84,8 @@ export default function UploadZone({ onUploadComplete }) {
     }
 
     const fileType = file.type;
-    if (!fileType.startsWith('image/') && !fileType.startsWith('video/')) {
-      setError('Unsupported file type. Please upload an image or video.');
+    if (!fileType.startsWith('image/')) {
+      setError('Unsupported file type. Please upload an image.');
       return;
     }
 
@@ -177,7 +177,7 @@ export default function UploadZone({ onUploadComplete }) {
             ref={fileInputRef}
             type="file"
             className="hidden"
-            accept="image/*,video/*"
+            accept="image/*"
             onChange={handleChange}
           />
 
@@ -191,7 +191,7 @@ export default function UploadZone({ onUploadComplete }) {
             Drag and drop your report media here
           </p>
           <p className="text-gray-400 text-sm text-center mb-6">
-            Supports JPG, PNG, WEBP, MP4, MOV up to 50 MB
+            Supports JPG, PNG, WEBP up to 50 MB
           </p>
 
           <button
