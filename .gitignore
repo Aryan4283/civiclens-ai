@@ -5,3 +5,4 @@ node_modules/
 AI_STUDIO_MASTER_PROMPT.md
 generate_prompt.js
 build_master_prompt.ps1
+server/env.yaml

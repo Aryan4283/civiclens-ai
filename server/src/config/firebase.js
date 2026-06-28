@@ -16,7 +16,10 @@ if (projectId && privateKey && clientEmail) {
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.appspot.com`
   });
 } else {
-  initializeApp();
+  // Fallback to Application Default Credentials for Cloud Run
+  initializeApp({
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${process.env.GOOGLE_CLOUD_PROJECT || 'civiclens-ca27d'}.appspot.com`
+  });
 }
 
 const db = getFirestore();
