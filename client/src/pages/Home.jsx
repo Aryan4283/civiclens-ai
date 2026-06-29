@@ -335,7 +335,7 @@ export default function Home() {
         <div className="flex flex-wrap justify-center gap-10 fade-up" style={{ animationDelay: '0.4s' }}>
           {[
             { n: statsLoading ? '...' : ((stats && stats.total_issues) || 15) + '+', label: 'Issues Analyzed' },
-            { n: '3',  label: 'Autonomous AI Agents' },
+            { n: '5',  label: 'Autonomous AI Agents' },
             { n: '5+', label: 'Departments Connected' },
           ].map((s, i) => (
             <div key={i} className="text-center">

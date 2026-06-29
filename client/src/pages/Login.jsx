@@ -69,7 +69,6 @@ export default function Login() {
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm text-gray-800
                     focus:outline-none focus:ring-2 focus:ring-civic-primary/40 focus:border-civic-primary
                     transition-all duration-200 placeholder-gray-400"
-                  placeholder="you@example.com"
                   disabled={loading}
                 />
               </div>
@@ -87,7 +86,6 @@ export default function Login() {
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm text-gray-800
                     focus:outline-none focus:ring-2 focus:ring-civic-primary/40 focus:border-civic-primary
                     transition-all duration-200 placeholder-gray-400"
-                  placeholder="••••••••"
                   disabled={loading}
                 />
               </div>
