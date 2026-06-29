@@ -43,10 +43,12 @@ def create_doc():
         # Check if it's a list item
         elif line.startswith('- ') or line.startswith('* '):
             clean_line = line[2:].replace('**', '')
+            clean_line = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', clean_line)
             doc.add_paragraph(clean_line, style='List Bullet')
             
         else:
             clean_line = line.replace('**', '')
+            clean_line = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', clean_line)
             doc.add_paragraph(clean_line)
             
     doc.save('CivicLens_Submission_Report.docx')
