@@ -17,7 +17,7 @@ Recognizing the legal and bureaucratic impossibility of directly integrating wit
 ## 🚀 Live Links & Demo Access
 - **Live App:** [https://civiclens-ca27d.web.app](https://civiclens-ca27d.web.app)
 - **GitHub Repository:** [https://github.com/Aryan4283/civiclens-ai](https://github.com/Aryan4283/civiclens-ai)
-- **Demo Account (Judges):** Use the following credentials to bypass registration and instantly test the platform.
+- **Demo Account:** Use the following credentials to bypass registration and instantly test the platform.
   - **Email:** demo@civiclens.ai
   - **Password:** CivicLens2026
 
@@ -57,8 +57,8 @@ When an authority claims to have fixed an issue, they upload a photo. The AI act
 **7. The Authority Dashboard (The Command Center & Oracle)**
 We built a comprehensive, AI-powered command center for government officials to manage city infrastructure efficiently. Instead of relying on manual data entry, the dashboard provides predictive analytics and real-time SLA tracking.
 
-- **Authority Workspace & Identity:** A secure, centralized portal where government officials log in to oversee city-wide infrastructure issues.
-  ![Authority Workspace](./screenshots/14_logged_in.png)
+- **Unified Navigation Experience:** The platform features an integrated navigation system, allowing seamless switching between the citizen-facing home feed and the dedicated "Authority Portal" to ensure a frictionless demonstration of the platform.
+  ![Unified Navigation](./screenshots/14_logged_in.png)
 
 - **AI Action Queue & Kanban Board:** A real-time, status-based Kanban board with dropdown controls that tracks incoming issues. The system automatically prioritizes tickets based on their AI-assigned severity score and SLA deadlines, ensuring critical emergencies never slip through the cracks.
   ![Action Queue](./screenshots/15-action-queue.png)
@@ -80,11 +80,14 @@ We built a comprehensive, AI-powered command center for government officials to 
 
 ## Google Technologies Utilized
 - **Google Gen AI SDK (Gemini):** This is the core intelligence of the platform. We utilized `gemini-3.5-flash` to power five distinct agents:
-  - **Observer Agent:** Utilizes True Function Calling (Structured JSON outputs) to perform Computer Vision analysis on multi-modal image and video-based issue reporting, and process multilingual text input — citizens can describe issues in Hindi, Marathi, or any regional language; AI translates automatically.
+  - **Observer Agent:** Utilizes True Function Calling (Structured JSON outputs) to perform Computer Vision analysis on multi-modal image and video-based issue reporting, and process multilingual text input — citizens can describe issues in Hindi, Marathi, or any regional language; AI translates and extracts structured data automatically.
   - **Router Agent:** Utilizes RAG (Retrieval-Augmented Generation) to analyze synthetic municipal policy documents (`sla_document.md`) to autonomously determine jurisdiction and assign legally-binding SLA deadlines.
-  - **Escalator & Synthesizer Agents:** Autonomous AI agents that run on chronological background cron jobs to mathematically cluster Mega-Issues and generate city-wide predictive Oracle reports without human intervention.
+  - **Escalator Agent:** An autonomous background cron-job agent that runs two passes on the database every 6 hours: (1) a **Geolocation Deduplication Pass** using the Haversine formula to mathematically cluster duplicate reports within 100 meters into a single Mega-Issue, and (2) a **3-Level SLA Escalation Pass** that generates increasingly severe legal documents — Level 1: Formal Complaint Letter, Level 2: RTI (Right to Information) Application Draft, Level 3: Media & NGO Alert Press Release — when SLA deadlines are breached.
+  - **Synthesizer Agent (Civic Oracle):** Uses `gemini-3.5-flash` (the Pro model) to analyze city-wide data and generate a structured City Infrastructure Health Report with a live City Health Score, trending issues, investment priorities, and a journalistic weekly bulletin.
   - **QA Agent:** Performs comparative visual analysis between "before" and "after" photos.
-- **Custom AI Fallback Mesh:** We built a custom SDK wrapper that intercepts rate-limit errors and silently falls back to `gemini-3.1-flash-lite`, ensuring 100% uptime during evaluation.
+  - **Citizen Chatbot:** A contextual in-app assistant on every issue detail page, powered by Gemini, that answers citizen questions about their specific SLA deadline and issue status using real-time metadata.
+- **Department Scorecard AI:** The Authority Dashboard's scorecard mathematically calculates a performance grade per department (60% resolution rate + 40% SLA compliance), then passes this to Gemini to generate an AI commentary with specific, actionable improvement recommendations.
+- **Custom AI Fallback Mesh:** We built a custom SDK wrapper around the Google Gen AI SDK that intercepts any rate-limit or API error and silently waterfalls through a chain of 4 Gemini model versions (`gemini-3.5-flash` → `gemini-3-flash` → `gemini-2.5-flash` → `gemini-3.1-flash-lite`), ensuring 100% uptime during evaluation with zero user-visible errors.
 - **Google Cloud Run:** The entire Node.js AI backend is containerized with Docker and deployed to Cloud Run for scalable, serverless execution.
 - **Firebase Hosting:** Delivers the React frontend via Google's global CDN.
 - **Google Maps API:** Used for high-accuracy geolocation pinning, reverse geocoding, and mapping issue clusters across the city.
